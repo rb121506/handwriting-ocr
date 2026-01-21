@@ -1,18 +1,19 @@
 import os
+import io
 import logging
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
-import pytesseract
-from PIL import Image
-import cv2
-import numpy as np
+from PIL import Image, ImageOps, ImageFilter
 from pdf2image import convert_from_path
-import tempfile
 import time
+from google import genai
+from dotenv import load_dotenv
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -21,6 +22,19 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 app.config['UPLOAD_FOLDER'] = 'uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'pdf'}
 
+# Initialize Gemini client
+gemini_client = None
+
+try:
+    api_key = os.environ.get('GEMINI_API_KEY')
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable not set")
+    gemini_client = genai.Client(api_key=api_key)
+    logger.info("Google Gemini OCR initialized with gemini-2.5-flash")
+except Exception as e:
+    logger.error(f"Failed to initialize Gemini: {str(e)}")
+    raise
+
 # Ensure upload folder exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
@@ -28,51 +42,104 @@ def allowed_file(filename):
     """Check if file extension is allowed."""
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def preprocess_image(image):
+
+
+def _prepare_image_variants(img: Image.Image) -> tuple[Image.Image, Image.Image]:
+    """Create multiple preprocessed variants to improve handwriting OCR with Gemini."""
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+
+    # Upscale small images for better legibility
+    width, height = img.size
+    scale = 3 if max(width, height) < 1400 else 1
+    if scale != 1:
+        img = img.resize((width * scale, height * scale), Image.LANCZOS)
+
+    # Variant A: enhanced original
+    enhanced = ImageOps.autocontrast(img)
+    enhanced = enhanced.filter(ImageFilter.SHARPEN)
+    enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=2.0, percent=180, threshold=3))
+
+    # Variant B: high-contrast binarized for handwriting
+    gray = ImageOps.grayscale(enhanced)
+    gray = ImageOps.autocontrast(gray)
+    binarized = gray.point(lambda x: 0 if x < 165 else 255, mode='1')
+    binarized = binarized.convert('RGB')
+
+    return enhanced, binarized
+
+
+def extract_text_with_gemini(image_input):
     """
-    Preprocess image for better OCR accuracy.
+    Extract text from an image using Google Gemini API.
     
     Args:
-        image: PIL Image or numpy array
+        image_input: Path to the image file, bytes, or PIL Image
         
     Returns:
-        Preprocessed image as numpy array
+        Extracted text as string
     """
-    # Convert PIL Image to numpy array if needed
-    if isinstance(image, Image.Image):
-        img = np.array(image)
-    else:
-        img = image
-    
-    # Convert to grayscale
-    if len(img.shape) == 3:
-        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    else:
-        gray = img
-    
-    # Apply Gaussian blur for noise reduction
-    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    
-    # Apply adaptive thresholding for better binarization
-    thresh = cv2.adaptiveThreshold(
-        blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-        cv2.THRESH_BINARY, 11, 2
-    )
-    
-    # Apply morphological operations to reduce noise
-    kernel = np.ones((1, 1), np.uint8)
-    morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-    morph = cv2.morphologyEx(morph, cv2.MORPH_OPEN, kernel)
-    
-    # Enhance contrast
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    enhanced = clahe.apply(morph)
-    
-    return enhanced
+    try:
+        # Load and prepare image
+        if isinstance(image_input, Image.Image):
+            img = image_input
+        elif isinstance(image_input, (bytes, bytearray)):
+            img = Image.open(io.BytesIO(image_input))
+        else:
+            with open(image_input, 'rb') as image_file:
+                image_bytes = image_file.read()
+            img = Image.open(io.BytesIO(image_bytes))
+
+        enhanced, binarized = _prepare_image_variants(img)
+        
+        # Gemini prompt for OCR (strict, no hallucinations)
+        prompt = (
+            "You are a precise OCR engine for handwriting. Two images are provided: an enhanced original and a "
+            "binarized version. Use both to extract ONLY the text visible in the image. Do not guess or add words. "
+            "Preserve line breaks and line order exactly. If a word is unclear, output [UNK]. "
+            "Return only the extracted text."
+        )
+        
+        # Generate content
+        response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[prompt, enhanced, binarized],
+            config={
+                "temperature": 0,
+                "top_p": 0.1,
+                "top_k": 1
+            }
+        )
+
+        first_pass = getattr(response, "text", None) or ""
+
+        # Second pass: verify and correct against the image
+        review_prompt = (
+            "Review the OCR text against the images and correct any mistakes. "
+            "Only output text that is actually visible. Preserve line breaks exactly. "
+            "If unsure, use [UNK]. Here is the OCR text to verify:\n"
+            f"{first_pass}"
+        )
+
+        review_response = gemini_client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=[review_prompt, enhanced, binarized],
+            config={
+                "temperature": 0,
+                "top_p": 0.1,
+                "top_k": 1
+            }
+        )
+
+        final_text = getattr(review_response, "text", None) or first_pass
+        return final_text.strip() if final_text else ""
+    except Exception as e:
+        logger.error(f"Error extracting text with Gemini: {str(e)}")
+        raise
 
 def extract_text_from_image(image_path):
     """
-    Extract text from an image using Tesseract OCR.
+    Extract text from an image using Gemini API.
     
     Args:
         image_path: Path to the image file
@@ -80,21 +147,7 @@ def extract_text_from_image(image_path):
     Returns:
         Extracted text as string
     """
-    try:
-        # Load image
-        image = Image.open(image_path)
-        
-        # Preprocess image
-        processed = preprocess_image(image)
-        
-        # Perform OCR with custom configuration for handwriting
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(processed, config=custom_config)
-        
-        return text.strip()
-    except Exception as e:
-        logger.error(f"Error extracting text from image: {str(e)}")
-        raise
+    return extract_text_with_gemini(image_path)
 
 def extract_text_from_pdf(pdf_path):
     """
@@ -108,18 +161,14 @@ def extract_text_from_pdf(pdf_path):
     """
     try:
         # Convert PDF pages to images
-        images = convert_from_path(pdf_path)
+        images = convert_from_path(pdf_path, dpi=300)
         
         all_text = []
         for i, image in enumerate(images):
             logger.info(f"Processing page {i + 1} of {len(images)}")
             
-            # Preprocess image
-            processed = preprocess_image(image)
-            
-            # Perform OCR
-            custom_config = r'--oem 3 --psm 6'
-            text = pytesseract.image_to_string(processed, config=custom_config)
+            # Extract text using Gemini
+            text = extract_text_with_gemini(image)
             
             if text.strip():
                 all_text.append(f"--- Page {i + 1} ---\n{text.strip()}")
