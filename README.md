@@ -89,6 +89,11 @@ If Tesseract is not found, make sure it's in your system PATH.
    ```bash
    python app.py
    ```
+   
+   For development with debug mode enabled:
+   ```bash
+   FLASK_DEBUG=true python app.py
+   ```
 
 2. **Open your browser** and navigate to:
    ```
@@ -111,6 +116,7 @@ You can modify the following settings in `app.py`:
 
 - **Max file size**: Change `app.config['MAX_CONTENT_LENGTH']` (default: 16MB)
 - **Upload folder**: Change `app.config['UPLOAD_FOLDER']` (default: 'uploads')
+- **Debug mode**: Set `FLASK_DEBUG=true` environment variable for development
 - **OCR engine mode**: Modify the `custom_config` parameter in OCR functions
 - **Preprocessing parameters**: Adjust values in the `preprocess_image()` function
 
