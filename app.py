@@ -3,7 +3,7 @@ import io
 import logging
 from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
-from PIL import Image, ImageOps, ImageFilter
+from PIL import Image
 from pdf2image import convert_from_path
 import time
 from google import genai
@@ -44,31 +44,6 @@ def allowed_file(filename):
 
 
 
-def _prepare_image_variants(img: Image.Image) -> tuple[Image.Image, Image.Image]:
-    """Create multiple preprocessed variants to improve handwriting OCR with Gemini."""
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-
-    # Upscale small images for better legibility
-    width, height = img.size
-    scale = 3 if max(width, height) < 1400 else 1
-    if scale != 1:
-        img = img.resize((width * scale, height * scale), Image.LANCZOS)
-
-    # Variant A: enhanced original
-    enhanced = ImageOps.autocontrast(img)
-    enhanced = enhanced.filter(ImageFilter.SHARPEN)
-    enhanced = enhanced.filter(ImageFilter.UnsharpMask(radius=2.0, percent=180, threshold=3))
-
-    # Variant B: high-contrast binarized for handwriting
-    gray = ImageOps.grayscale(enhanced)
-    gray = ImageOps.autocontrast(gray)
-    binarized = gray.point(lambda x: 0 if x < 165 else 255, mode='1')
-    binarized = binarized.convert('RGB')
-
-    return enhanced, binarized
-
-
 def extract_text_with_gemini(image_input):
     """
     Extract text from an image using Google Gemini API.
@@ -89,21 +64,14 @@ def extract_text_with_gemini(image_input):
             with open(image_input, 'rb') as image_file:
                 image_bytes = image_file.read()
             img = Image.open(io.BytesIO(image_bytes))
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
 
-        enhanced, binarized = _prepare_image_variants(img)
-        
-        # Gemini prompt for OCR (strict, no hallucinations)
-        prompt = (
-            "You are a precise OCR engine for handwriting. Two images are provided: an enhanced original and a "
-            "binarized version. Use both to extract ONLY the text visible in the image. Do not guess or add words. "
-            "Preserve line breaks and line order exactly. If a word is unclear, output [UNK]. "
-            "Return only the extracted text."
-        )
-        
-        # Generate content
+        prompt = "Extract only the visible text from this image. Preserve line breaks. If unsure, use [UNK]."
+
         response = gemini_client.models.generate_content(
             model="gemini-2.5-flash",
-            contents=[prompt, enhanced, binarized],
+            contents=[prompt, img],
             config={
                 "temperature": 0,
                 "top_p": 0.1,
@@ -111,28 +79,8 @@ def extract_text_with_gemini(image_input):
             }
         )
 
-        first_pass = getattr(response, "text", None) or ""
-
-        # Second pass: verify and correct against the image
-        review_prompt = (
-            "Review the OCR text against the images and correct any mistakes. "
-            "Only output text that is actually visible. Preserve line breaks exactly. "
-            "If unsure, use [UNK]. Here is the OCR text to verify:\n"
-            f"{first_pass}"
-        )
-
-        review_response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[review_prompt, enhanced, binarized],
-            config={
-                "temperature": 0,
-                "top_p": 0.1,
-                "top_k": 1
-            }
-        )
-
-        final_text = getattr(review_response, "text", None) or first_pass
-        return final_text.strip() if final_text else ""
+        final_text = getattr(response, "text", None) or ""
+        return final_text.strip()
     except Exception as e:
         logger.error(f"Error extracting text with Gemini: {str(e)}")
         raise
@@ -277,4 +225,5 @@ def request_entity_too_large(error):
 if __name__ == '__main__':
     # Get debug mode from environment variable (default: False for production)
     debug_mode = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
-    app.run(debug=debug_mode, host='0.0.0.0', port=5000)
+    port = int(os.environ.get('PORT', '5000'))
+    app.run(debug=debug_mode, host='0.0.0.0', port=port)

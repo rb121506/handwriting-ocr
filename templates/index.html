@@ -3,77 +3,76 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Handwriting OCR - Convert Handwritten Notes to Text</title>
+    <title>Handwriting OCR</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
     <div class="container">
-        <header>
-            <h1>📝 Handwriting OCR</h1>
-            <p class="subtitle">Convert handwritten notes from images and PDFs into editable text</p>
-        </header>
+        <!-- Upload Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">📄 Upload Image</div>
+                <div class="panel-subtitle">Drop an image or PDF to extract text</div>
+            </div>
 
-        <main>
-            <!-- Upload Section -->
-            <section class="upload-section" id="uploadSection">
-                <div class="upload-area" id="uploadArea">
-                    <div class="upload-icon">📤</div>
-                    <h2>Drag & Drop your file here</h2>
-                    <p>or click to browse</p>
-                    <p class="file-types">Supports: JPEG, JPG, PNG, PDF (max 16MB)</p>
-                    <input type="file" id="fileInput" accept=".jpg,.jpeg,.png,.pdf" hidden>
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">📷</div>
+                <div class="upload-text">Click or drag image here</div>
+                <div class="upload-hint">Supports PNG, JPG, PDF (max 16MB)</div>
+                <input type="file" id="fileInput" accept="image/*,.pdf">
+            </div>
+
+            <img id="preview" class="preview-image" alt="Preview">
+            <div id="fileInfo" class="file-info"></div>
+
+            <div class="upload-buttons">
+                <button class="btn btn-primary" id="processBtn" disabled>
+                    ✨ Process Image
+                </button>
+                <button class="btn btn-secondary" id="clearUploadBtn">Clear</button>
+            </div>
+        </div>
+
+        <!-- Results Panel -->
+        <div class="panel">
+            <div class="panel-header">
+                <div class="panel-title">📝 Extracted Text</div>
+                <div class="panel-subtitle">Your OCR results appear here</div>
+            </div>
+
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-value" id="wordCount">0</div>
+                    <div class="stat-label">Words</div>
                 </div>
-                
-                <div class="progress-container" id="progressContainer" style="display: none;">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill"></div>
-                    </div>
-                    <p class="progress-text" id="progressText">Processing...</p>
+                <div class="stat">
+                    <div class="stat-value" id="charCount">0</div>
+                    <div class="stat-label">Characters</div>
                 </div>
-            </section>
+            </div>
 
-            <!-- Results Section -->
-            <section class="results-section" id="resultsSection" style="display: none;">
-                <div class="results-header">
-                    <h2>Extracted Text</h2>
-                    <div class="stats">
-                        <span id="wordCount">0 words</span>
-                        <span>•</span>
-                        <span id="charCount">0 characters</span>
-                    </div>
-                </div>
+            <textarea 
+                class="results-text" 
+                id="resultsText" 
+                placeholder="Extracted text will appear here..."
+                readonly
+            ></textarea>
 
-                <div class="text-output-container">
-                    <textarea id="extractedText" placeholder="Extracted text will appear here..."></textarea>
-                </div>
-
-                <div class="action-buttons">
-                    <button class="btn btn-primary" id="copyBtn">
-                        <span class="btn-icon">📋</span>
-                        Copy to Clipboard
-                    </button>
-                    <button class="btn btn-primary" id="downloadBtn">
-                        <span class="btn-icon">💾</span>
-                        Download as TXT
-                    </button>
-                    <button class="btn btn-secondary" id="clearBtn">
-                        <span class="btn-icon">🔄</span>
-                        Clear
-                    </button>
-                    <button class="btn btn-secondary" id="uploadAnotherBtn">
-                        <span class="btn-icon">📁</span>
-                        Upload Another
-                    </button>
-                </div>
-            </section>
-
-            <!-- Notification -->
-            <div class="notification" id="notification"></div>
-        </main>
-
-        <footer>
-            <p>Built with Flask, Tesseract OCR, and OpenCV</p>
-        </footer>
+            <div class="action-buttons">
+                <button class="btn btn-primary btn-small" id="copyBtn" disabled>
+                    📋 Copy
+                </button>
+                <button class="btn btn-primary btn-small" id="downloadBtn" disabled>
+                    ⬇️ Download
+                </button>
+                <button class="btn btn-secondary btn-small" id="clearTextBtn" disabled>
+                    🗑️ Clear
+                </button>
+                <button class="btn btn-secondary btn-small" id="shareBtn" disabled>
+                    📤 Share
+                </button>
+            </div>
+        </div>
     </div>
 
     <script src="{{ url_for('static', filename='js/main.js') }}"></script>
